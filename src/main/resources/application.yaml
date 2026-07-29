@@ -1,6 +1,10 @@
 spring:
   application:
     name: server
+
 springdoc:
   swagger-ui:
     path: /swagger-ui.html
+
+idp:
+  jwks-url: http://localhost:8081/.well-known/jwks.json
