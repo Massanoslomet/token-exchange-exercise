@@ -7,6 +7,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
+import java.util.Set;
 
 @RestController
 public class ExchangeController {
@@ -22,13 +23,16 @@ public class ExchangeController {
 
     private final ServiceRegistry serviceRegistry;
     private final SubjectTokenValidator subjectTokenValidator;
+    private final ScopeMappingService scopeMappingService;
 
     public ExchangeController(
             ServiceRegistry serviceRegistry,
-            SubjectTokenValidator subjectTokenValidator
+            SubjectTokenValidator subjectTokenValidator,
+            ScopeMappingService scopeMappingService
     ) {
         this.serviceRegistry = serviceRegistry;
         this.subjectTokenValidator = subjectTokenValidator;
+        this.scopeMappingService = scopeMappingService;
     }
 
     @PostMapping(
@@ -112,12 +116,30 @@ public class ExchangeController {
             );
         }
 
+        Set<String> requestedScopes = scopeMappingService.requestedScopes(request.scope());
+
+        Set<String> allowedScopes = scopeMappingService.allowedDelegatedScopes(
+                subjectClaims.scope(),
+                caller.allowedScopes()
+        );
+
+        if (!scopeMappingService.isAllowed(requestedScopes, allowedScopes)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(
+                    ApiError.of(
+                            "insufficient_scope",
+                            "Requested scope is not allowed for this subject and caller"
+                    )
+            );
+        }
+
+        String issuedScope = String.join(" ", requestedScopes);
+
         return ResponseEntity.ok(Map.of(
                 "access_token", "temporary-delegated-token-for-" + subjectClaims.subject(),
                 "token_type", "Bearer",
                 "expires_in", 300,
                 "issued_token_type", ACCESS_TOKEN_TYPE,
-                "scope", request.scope()
+                "scope", issuedScope
         ));
     }
 }
