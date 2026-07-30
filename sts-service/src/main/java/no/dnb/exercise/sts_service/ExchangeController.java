@@ -24,15 +24,18 @@ public class ExchangeController {
     private final ServiceRegistry serviceRegistry;
     private final SubjectTokenValidator subjectTokenValidator;
     private final ScopeMappingService scopeMappingService;
+    private final DelegatedTokenService delegatedTokenService;
 
     public ExchangeController(
             ServiceRegistry serviceRegistry,
             SubjectTokenValidator subjectTokenValidator,
-            ScopeMappingService scopeMappingService
+            ScopeMappingService scopeMappingService,
+            DelegatedTokenService delegatedTokenService
     ) {
         this.serviceRegistry = serviceRegistry;
         this.subjectTokenValidator = subjectTokenValidator;
         this.scopeMappingService = scopeMappingService;
+        this.delegatedTokenService = delegatedTokenService;
     }
 
     @PostMapping(
@@ -134,8 +137,15 @@ public class ExchangeController {
 
         String issuedScope = String.join(" ", requestedScopes);
 
+        String delegatedAccessToken = delegatedTokenService.issueDelegatedAccessToken(
+                subjectClaims.subject(),
+                request.audience(),
+                issuedScope,
+                caller.clientId()
+        );
+
         return ResponseEntity.ok(Map.of(
-                "access_token", "temporary-delegated-token-for-" + subjectClaims.subject(),
+                "access_token", delegatedAccessToken,
                 "token_type", "Bearer",
                 "expires_in", 300,
                 "issued_token_type", ACCESS_TOKEN_TYPE,
