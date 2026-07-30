@@ -6,11 +6,13 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Component
 public class TokenAuthenticationFilter extends OncePerRequestFilter {
@@ -33,44 +35,88 @@ public class TokenAuthenticationFilter extends OncePerRequestFilter {
             FilterChain filterChain
     ) throws ServletException, IOException {
 
-        String path = request.getRequestURI();
-
-        if (!path.startsWith("/api/resources")) {
+        if (!request.getRequestURI().startsWith("/api/resources")) {
             filterChain.doFilter(request, response);
             return;
         }
 
-        String authorizationHeader = request.getHeader(HttpHeaders.AUTHORIZATION);
+        String authorization = request.getHeader(HttpHeaders.AUTHORIZATION);
 
-        if (authorizationHeader == null || !authorizationHeader.startsWith("Bearer ")) {
-            writeUnauthorized(response, "Missing Authorization Bearer token");
+        if (authorization == null || !authorization.startsWith("Bearer ")) {
+            writeError(
+                    response,
+                    HttpServletResponse.SC_UNAUTHORIZED,
+                    "unauthorized",
+                    "Missing Authorization Bearer token"
+            );
             return;
         }
 
-        String token = authorizationHeader.substring("Bearer ".length());
+        String token = authorization.substring("Bearer ".length());
+
+        JwtValidationService.TokenClaims claims;
 
         try {
-            JwtValidationService.TokenClaims claims = jwtValidationService.validate(token);
-
-            request.setAttribute("user", claims.subject());
-            request.setAttribute("scope", claims.scope());
-
-            filterChain.doFilter(request, response);
-
+            claims = jwtValidationService.validate(token);
         } catch (IllegalArgumentException e) {
-            writeUnauthorized(response, "Invalid or expired token");
+            writeError(
+                    response,
+                    HttpServletResponse.SC_UNAUTHORIZED,
+                    "unauthorized",
+                    "Invalid or expired token"
+            );
+            return;
         }
+
+        String requiredScope = requiredScopeFor(request.getMethod());
+
+        if (requiredScope != null && !hasScope(claims.scope(), requiredScope)) {
+            writeError(
+                    response,
+                    HttpServletResponse.SC_FORBIDDEN,
+                    "insufficient_scope",
+                    "Token does not have required scope: " + requiredScope
+            );
+            return;
+        }
+
+        request.setAttribute("subject", claims.subject());
+        request.setAttribute("scope", claims.scope());
+        request.setAttribute("actor", claims.actor());
+
+        filterChain.doFilter(request, response);
     }
 
-    private void writeUnauthorized(HttpServletResponse response, String description) throws IOException {
-        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+    private String requiredScopeFor(String method) {
+        return switch (method) {
+            case "GET" -> "backend:read";
+            case "POST", "PUT", "DELETE" -> "backend:write";
+            default -> null;
+        };
+    }
 
-        ApiError error = ApiError.of(
-                "unauthorized",
-                description
-        );
+    private boolean hasScope(String tokenScopes, String requiredScope) {
+        if (tokenScopes == null || tokenScopes.isBlank()) {
+            return false;
+        }
 
-        objectMapper.writeValue(response.getWriter(), error);
+        Set<String> scopes = Arrays.stream(tokenScopes.split("\\s+"))
+                .collect(Collectors.toSet());
+
+        return scopes.contains(requiredScope);
+    }
+
+    private void writeError(
+            HttpServletResponse response,
+            int status,
+            String error,
+            String description
+    ) throws IOException {
+        response.setStatus(status);
+        response.setContentType("application/json");
+
+        ApiError apiError = ApiError.of(error, description);
+
+        objectMapper.writeValue(response.getWriter(), apiError);
     }
 }

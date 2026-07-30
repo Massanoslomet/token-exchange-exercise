@@ -48,7 +48,7 @@ class ResourceSecurityTest {
     @Test
     void shouldReturn200WhenTokenIsValid() throws Exception {
         Mockito.when(jwtValidationService.validate("valid-token"))
-                .thenReturn(new JwtValidationService.TokenClaims("agent_alpha", "read"));
+              .thenReturn(new JwtValidationService.TokenClaims("agent_alpha", "backend:read", "frontend-service"));
 
         mockMvc.perform(get("/api/resources")
                         .header(HttpHeaders.ACCEPT, "application/json")

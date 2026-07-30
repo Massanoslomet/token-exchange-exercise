@@ -13,7 +13,6 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.text.ParseException;
 import java.time.Instant;
 import java.util.Date;
 
@@ -23,7 +22,7 @@ public class JwtValidationService {
     private final String jwksUrl;
     private final HttpClient httpClient = HttpClient.newHttpClient();
 
-    public JwtValidationService(@Value("${idp.jwks-url}") String jwksUrl) {
+    public JwtValidationService(@Value("${sts.jwks-url}") String jwksUrl) {
         this.jwksUrl = jwksUrl;
     }
 
@@ -41,11 +40,11 @@ public class JwtValidationService {
             }
 
             String issuer = signedJWT.getJWTClaimsSet().getIssuer();
-            if (!"identity-provider".equals(issuer)) {
+            if (!"sts-service".equals(issuer)) {
                 throw new IllegalArgumentException("Invalid issuer");
             }
 
-            if (!signedJWT.getJWTClaimsSet().getAudience().contains("frontend-service")) {
+            if (!signedJWT.getJWTClaimsSet().getAudience().contains("backend-service")) {
                 throw new IllegalArgumentException("Invalid audience");
             }
 
@@ -55,12 +54,33 @@ public class JwtValidationService {
             }
 
             String subject = signedJWT.getJWTClaimsSet().getSubject();
-            String scope = signedJWT.getJWTClaimsSet().getStringClaim("scope");
+            if (subject == null || subject.isBlank()) {
+                throw new IllegalArgumentException("Missing subject");
+            }
 
-            return new TokenClaims(subject, scope);
+            String scope = signedJWT.getJWTClaimsSet().getStringClaim("scope");
+            if (scope == null || scope.isBlank()) {
+                throw new IllegalArgumentException("Missing scope");
+            }
+
+            String actor = null;
+            Object actClaim = signedJWT.getJWTClaimsSet().getClaim("act");
+
+            if (actClaim instanceof java.util.Map<?, ?> actMap) {
+                Object actorSubject = actMap.get("sub");
+                if (actorSubject != null) {
+                    actor = actorSubject.toString();
+                }
+            }
+
+            if (actor == null || actor.isBlank()) {
+                throw new IllegalArgumentException("Missing actor claim");
+            }
+
+            return new TokenClaims(subject, scope, actor);
 
         } catch (Exception e) {
-            throw new IllegalArgumentException("Token validation failed: " + e.getMessage(), e);
+            throw new IllegalArgumentException("Invalid or expired token", e);
         }
     }
 
@@ -76,7 +96,7 @@ public class JwtValidationService {
         );
 
         if (response.statusCode() != 200) {
-            throw new IllegalStateException("Could not fetch JWKS from IdP");
+            throw new IllegalStateException("Could not fetch JWKS from STS");
         }
 
         JWKSet jwkSet = JWKSet.parse(response.body());
@@ -91,7 +111,8 @@ public class JwtValidationService {
 
     public record TokenClaims(
             String subject,
-            String scope
+            String scope,
+            String actor
     ) {
     }
 }
