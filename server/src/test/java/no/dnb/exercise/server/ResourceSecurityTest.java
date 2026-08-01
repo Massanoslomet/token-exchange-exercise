@@ -22,6 +22,9 @@ class ResourceSecurityTest {
     @MockitoBean
     private JwtValidationService jwtValidationService;
 
+    @MockitoBean
+    private AuditLogService auditLogService;
+
     @Test
     void shouldReturn401WhenAuthorizationHeaderIsMissing() throws Exception {
         mockMvc.perform(get("/api/resources")

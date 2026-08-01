@@ -19,13 +19,16 @@ public class TokenAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtValidationService jwtValidationService;
     private final ObjectMapper objectMapper;
+    private final AuditLogService auditLogService;
 
     public TokenAuthenticationFilter(
             JwtValidationService jwtValidationService,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            AuditLogService auditLogService
     ) {
         this.jwtValidationService = jwtValidationService;
         this.objectMapper = objectMapper;
+        this.auditLogService = auditLogService;
     }
 
     @Override
@@ -40,9 +43,18 @@ public class TokenAuthenticationFilter extends OncePerRequestFilter {
             return;
         }
 
+        String action = request.getMethod() + " " + request.getRequestURI();
         String authorization = request.getHeader(HttpHeaders.AUTHORIZATION);
 
         if (authorization == null || !authorization.startsWith("Bearer ")) {
+            auditLogService.logAccess(
+                    "unknown",
+                    "unknown",
+                    action,
+                    "none",
+                    "DENIED_MISSING_TOKEN"
+            );
+
             writeError(
                     response,
                     HttpServletResponse.SC_UNAUTHORIZED,
@@ -59,6 +71,14 @@ public class TokenAuthenticationFilter extends OncePerRequestFilter {
         try {
             claims = jwtValidationService.validate(token);
         } catch (IllegalArgumentException e) {
+            auditLogService.logAccess(
+                    "unknown",
+                    "unknown",
+                    action,
+                    "unknown",
+                    "DENIED_INVALID_TOKEN"
+            );
+
             writeError(
                     response,
                     HttpServletResponse.SC_UNAUTHORIZED,
@@ -71,6 +91,14 @@ public class TokenAuthenticationFilter extends OncePerRequestFilter {
         String requiredScope = requiredScopeFor(request.getMethod());
 
         if (requiredScope != null && !hasScope(claims.scope(), requiredScope)) {
+            auditLogService.logAccess(
+                    claims.subject(),
+                    claims.actor(),
+                    action,
+                    claims.scope(),
+                    "DENIED_INSUFFICIENT_SCOPE"
+            );
+
             writeError(
                     response,
                     HttpServletResponse.SC_FORBIDDEN,
@@ -79,6 +107,14 @@ public class TokenAuthenticationFilter extends OncePerRequestFilter {
             );
             return;
         }
+
+        auditLogService.logAccess(
+                claims.subject(),
+                claims.actor(),
+                action,
+                claims.scope(),
+                "ALLOWED"
+        );
 
         request.setAttribute("subject", claims.subject());
         request.setAttribute("scope", claims.scope());
