@@ -46,9 +46,14 @@ Audit Log
 ```text
 token-exchange-exercise/
   frontend-service/
+    Dockerfile
   identity-provider/
+    Dockerfile
   sts-service/
+    Dockerfile
   server/
+    Dockerfile
+  docker-compose.yml
   README.md
 ```
 
@@ -133,6 +138,7 @@ Example response:
   "access_token": "<delegated access token>",
   "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
   "token_type": "Bearer",
+  "scope": "backend:read",
   "expires_in": 300
 }
 ```
@@ -209,7 +215,7 @@ Example audit entry:
 
 ```json
 {
-  "timestamp": "2026-08-01T16:34:59.236479100Z",
+  "timestamp": "2026-08-03T12:04:23.269632069Z",
   "event": "ACCESS",
   "user": "agent_alpha",
   "actor": "frontend-service",
@@ -250,7 +256,7 @@ Authorization: Bearer <id_token_from_identity_provider>
 
 The frontend-service does not send the original ID token to the backend. It sends only the delegated access token from STS.
 
-## Running the services
+## Running the services locally without Docker
 
 Open four separate PowerShell terminals.
 
@@ -418,6 +424,233 @@ Backend validated STS token
 Backend logged user, actor, action, scope and result
 ```
 
+## Running with Docker Compose
+
+The project can also be started with Docker Compose.
+
+This starts all four services:
+
+```text
+frontend-service   -> http://localhost:8080
+identity-provider  -> http://localhost:8081
+sts-service        -> http://localhost:8082
+backend-service    -> http://localhost:8083
+```
+
+### Start all services
+
+From the project root:
+
+```powershell
+cd C:\Users\atimo\OneDrive\documents\token-exchange-exercise
+
+docker compose up --build
+```
+
+This builds and starts:
+
+```text
+identity-provider
+sts-service
+backend-service
+frontend-service
+```
+
+The services communicate internally through Docker service names:
+
+```text
+frontend-service -> sts-service
+frontend-service -> backend-service
+sts-service      -> identity-provider
+backend-service  -> sts-service
+```
+
+Important: inside Docker, services do not use `localhost` to call each other. They use the service names from `docker-compose.yml`.
+
+For example:
+
+```text
+http://sts-service:8082/exchange
+http://backend-service:8083/api/resources
+http://identity-provider:8081/.well-known/jwks.json
+```
+
+### Stop all services
+
+```powershell
+docker compose down
+```
+
+## Docker health check
+
+When Docker Compose is running, open a new PowerShell terminal and run:
+
+```powershell
+curl.exe -i http://localhost:8081/.well-known/jwks.json
+curl.exe -i http://localhost:8082/.well-known/jwks.json
+curl.exe -i http://localhost:8083/audit
+curl.exe -i http://localhost:8080/frontend/resources
+```
+
+Expected result:
+
+```text
+8081 -> HTTP/1.1 200
+8082 -> HTTP/1.1 200
+8083 -> HTTP/1.1 200
+8080 -> HTTP/1.1 401 without token
+```
+
+The `401` from `frontend-service` is expected when no Bearer token is provided.
+
+## Full Docker Compose delegation flow
+
+### 1. Get ID token from Identity Provider
+
+```powershell
+$body = @{
+  client_id = "agent_alpha"
+  client_secret = "alpha-secret"
+} | ConvertTo-Json -Compress
+
+$idpResponse = Invoke-RestMethod `
+  -Uri "http://localhost:8081/auth/token" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body $body
+
+$idToken = $idpResponse.id_token
+```
+
+### 2. Call Frontend Service with the ID token
+
+```powershell
+Invoke-RestMethod `
+  -Uri "http://localhost:8080/frontend/resources" `
+  -Method Get `
+  -Headers @{
+    Authorization = "Bearer $idToken"
+    Accept = "application/json"
+  }
+```
+
+Expected result:
+
+```text
+id name            owner
+-- ----            -----
+ 1 First resource  agent_alpha
+ 2 Second resource agent_beta
+```
+
+### 3. Check backend audit log
+
+```powershell
+curl.exe -i http://localhost:8083/audit
+```
+
+Expected audit entry:
+
+```json
+{
+  "event": "ACCESS",
+  "user": "agent_alpha",
+  "actor": "frontend-service",
+  "action": "GET /api/resources",
+  "scope": "backend:read",
+  "result": "ALLOWED"
+}
+```
+
+This proves that the full Docker Compose flow works:
+
+```text
+Client
+  -> frontend-service container
+  -> sts-service container
+  -> backend-service container
+  -> audit log
+```
+
+## Docker files
+
+The project contains one `Dockerfile` for each service:
+
+```text
+identity-provider/Dockerfile
+sts-service/Dockerfile
+server/Dockerfile
+frontend-service/Dockerfile
+```
+
+The root folder contains:
+
+```text
+docker-compose.yml
+```
+
+Each Dockerfile uses a two-stage build:
+
+```text
+1. Build stage: uses Java 17 JDK and Maven wrapper to build the jar
+2. Runtime stage: uses Java 17 JRE to run the jar
+```
+
+This keeps the runtime container simpler than the build container.
+
+## Docker commands used during development
+
+Build individual images manually:
+
+```powershell
+cd C:\Users\atimo\OneDrive\documents\token-exchange-exercise\identity-provider
+docker build -t identity-provider .
+
+cd C:\Users\atimo\OneDrive\documents\token-exchange-exercise\sts-service
+docker build -t sts-service .
+
+cd C:\Users\atimo\OneDrive\documents\token-exchange-exercise\server
+docker build -t backend-service .
+
+cd C:\Users\atimo\OneDrive\documents\token-exchange-exercise\frontend-service
+docker build -t frontend-service .
+```
+
+Run everything together with Docker Compose:
+
+```powershell
+cd C:\Users\atimo\OneDrive\documents\token-exchange-exercise
+
+docker compose up --build
+```
+
+Stop everything:
+
+```powershell
+docker compose down
+```
+
+Check running containers:
+
+```powershell
+docker ps
+```
+
+Check all containers, including stopped ones:
+
+```powershell
+docker ps -a
+```
+
+Remove old test containers if needed:
+
+```powershell
+docker rm -f frontend-service-test
+docker rm -f backend-service-test
+docker rm -f sts-service-test
+docker rm -f identity-provider-test
+```
+
 ## Manual backend security checks
 
 ### Missing token
@@ -555,6 +788,8 @@ Backend checks expiration
 Backend checks scope
 Backend records delegation chain in audit log
 Frontend retries once if backend returns 401
+Docker Compose runs all services together
+Services communicate through Docker service names
 ```
 
 ## Important ports
@@ -597,12 +832,14 @@ Module 4: Frontend service orchestration
 Module 4: Tests for backend audit flow
 Module 4: Tests for frontend controller
 Module 4: Tests for frontend orchestration service
+Module 5: Dockerfiles for all services
+Module 5: Docker Compose setup
+Module 5: Full Docker Compose flow tested manually
 ```
 
 Not completed yet:
 
 ```text
-Module 5: Docker setup
 Module 6: Optional extensions
 ```
 
@@ -612,4 +849,6 @@ This is a learning project. Secrets and clients are hardcoded for simplicity.
 
 The audit log is in-memory and will be cleared when the backend service restarts.
 
-The services use local ports and static configuration. Docker and production-style configuration are not implemented yet.
+The services use local ports and static configuration for local development.
+
+Docker Compose is available for running all services together with one command.
