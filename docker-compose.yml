@@ -1,0 +1,42 @@
+services:
+  identity-provider:
+    build:
+      context: ./identity-provider
+    container_name: identity-provider
+    ports:
+      - "8081:8081"
+
+  sts-service:
+    build:
+      context: ./sts-service
+    container_name: sts-service
+    ports:
+      - "8082:8082"
+    environment:
+      IDP_JWKS_URL: http://identity-provider:8081/.well-known/jwks.json
+    depends_on:
+      - identity-provider
+
+  backend-service:
+    build:
+      context: ./server
+    container_name: backend-service
+    ports:
+      - "8083:8083"
+    environment:
+      STS_JWKS_URL: http://sts-service:8082/.well-known/jwks.json
+    depends_on:
+      - sts-service
+
+  frontend-service:
+    build:
+      context: ./frontend-service
+    container_name: frontend-service
+    ports:
+      - "8080:8080"
+    environment:
+      STS_EXCHANGE_URL: http://sts-service:8082/exchange
+      BACKEND_RESOURCES_URL: http://backend-service:8083/api/resources
+    depends_on:
+      - sts-service
+      - backend-service
